@@ -444,28 +444,48 @@ class TopicStats {
                 "consumer_id", String.valueOf(consumer.consumerId()));
     }
 
+    /**
+     * Splits a tenant/namespace into two component parts.  If the given string does not
+     * contain a '/', assumes that the given name is just the namespace name without the
+     * tenant.
+     * @param tenantNamespace a string of the form "tenant/namespace"
+     * @return String array of length 2 containing the tenant name and the namespace name
+     */
+    static String[] splitTenantNamespace(String tenantNamespace) {
+        String[] split = tenantNamespace.split("/", 2);
+        if (split.length == 2) {
+            return split;
+        }
+        return new String[]{"", tenantNamespace};
+    }
+
     static void writeTopicMetric(PrometheusMetricStreams stream, String metricName, Number value, String cluster,
                                  String namespace, String topic, boolean splitTopicAndPartitionIndexLabel,
                                  String... extraLabelsAndValues) {
-        String[] labelsAndValues = new String[splitTopicAndPartitionIndexLabel ? 8 : 6];
+        String [] tenantAndNamespace = splitTenantNamespace(namespace);
+        String[] labelsAndValues = new String[splitTopicAndPartitionIndexLabel ? 12 : 10];
         labelsAndValues[0] = "cluster";
         labelsAndValues[1] = cluster;
         labelsAndValues[2] = "namespace";
         labelsAndValues[3] = namespace;
-        labelsAndValues[4] = "topic";
+        labelsAndValues[4] = "pulsar_tenant";
+        labelsAndValues[5] = tenantAndNamespace[0];
+        labelsAndValues[6] = "pulsar_namespace";
+        labelsAndValues[7] = tenantAndNamespace[1];
+        labelsAndValues[8] = "topic";
         if (splitTopicAndPartitionIndexLabel) {
             int index = topic.indexOf(PARTITIONED_TOPIC_SUFFIX);
             if (index > 0) {
-                labelsAndValues[5] = topic.substring(0, index);
-                labelsAndValues[6] = "partition";
-                labelsAndValues[7] = topic.substring(index + PARTITIONED_TOPIC_SUFFIX.length());
+                labelsAndValues[9] = topic.substring(0, index);
+                labelsAndValues[10] = "partition";
+                labelsAndValues[11] = topic.substring(index + PARTITIONED_TOPIC_SUFFIX.length());
             } else {
-                labelsAndValues[5] = topic;
-                labelsAndValues[6] = "partition";
-                labelsAndValues[7] = "-1";
+                labelsAndValues[9] = topic;
+                labelsAndValues[10] = "partition";
+                labelsAndValues[11] = "-1";
             }
         } else {
-            labelsAndValues[5] = topic;
+            labelsAndValues[9] = topic;
         }
         String[] labels = ArrayUtils.addAll(labelsAndValues, extraLabelsAndValues);
         stream.writeSample(metricName, value, labels);
