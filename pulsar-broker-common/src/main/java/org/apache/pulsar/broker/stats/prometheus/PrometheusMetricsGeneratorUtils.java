@@ -26,6 +26,8 @@ import java.io.OutputStream;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.regex.Pattern;
+
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.pulsar.common.allocator.PulsarByteBufAllocator;
 import org.apache.pulsar.common.util.SimpleTextOutputStream;
@@ -34,22 +36,47 @@ import org.apache.pulsar.common.util.SimpleTextOutputStream;
  * Generate metrics in a text format suitable to be consumed by Prometheus.
  * Format specification can be found at {@link https://prometheus.io/docs/instrumenting/exposition_formats/}
  */
+@Slf4j
 public class PrometheusMetricsGeneratorUtils {
     private static final Pattern METRIC_LABEL_VALUE_SPECIAL_CHARACTERS = Pattern.compile("[\\\\\"\\n]");
 
     public static void generate(String cluster, OutputStream out,
                                 List<PrometheusRawMetricsProvider> metricsProviders)
             throws IOException {
+        log.info("Generating metrics for cluster {}", cluster);
         ByteBuf buf = PulsarByteBufAllocator.DEFAULT.heapBuffer();
+        log.info("Allocated ByteBuf with writerIndex={} capacity={}, maxCapacity={}",
+                buf.writerIndex(), buf.capacity(), buf.maxCapacity());
         try {
             SimpleTextOutputStream stream = new SimpleTextOutputStream(buf);
-            generateSystemMetrics(stream, cluster);
+            log.info("starting generateSystemMetrics");
+            try {
+                generateSystemMetrics(stream, cluster);
+                log.info("used ByteBuf with writerIndex={} capacity={}, maxCapacity={}",
+                        buf.writerIndex(), buf.capacity(), buf.maxCapacity());
+            } catch (Throwable e) {
+                log.error("Failed to generate system metrics", e);
+                throw e;
+            }
             if (metricsProviders != null) {
+                log.info("starting generate metrics for {} provider(s)", metricsProviders.size());
                 for (PrometheusRawMetricsProvider metricsProvider : metricsProviders) {
-                    metricsProvider.generate(stream);
+                    log.info("starting generate for provider {}", metricsProvider.getClass().getName());
+                    try {
+                        metricsProvider.generate(stream);
+                        log.info("used ByteBuf with writerIndex={} capacity={}, maxCapacity={}",
+                                buf.writerIndex(), buf.capacity(), buf.maxCapacity());
+                    } catch (Throwable e) {
+                        log.error("Failed to generate metrics for provider {}",
+                                metricsProvider.getClass().getName(), e);
+                        throw e;
+                    }
                 }
             }
             out.write(buf.array(), buf.arrayOffset(), buf.readableBytes());
+            log.info("Successfully generated metrics for cluster {}", cluster);
+        } catch (Throwable t) {
+            log.error("Failed to generate metrics", t);
         } finally {
             buf.release();
         }
@@ -58,15 +85,30 @@ public class PrometheusMetricsGeneratorUtils {
     public static void generateSystemMetrics(SimpleTextOutputStream stream, String cluster) {
         Enumeration<Collector.MetricFamilySamples> metricFamilySamples =
                 CollectorRegistry.defaultRegistry.metricFamilySamples();
+        int count = 0;
+        ByteBuf buf = stream.getBuffer();
         while (metricFamilySamples.hasMoreElements()) {
+            count++;
             Collector.MetricFamilySamples metricFamily = metricFamilySamples.nextElement();
+
+            log.info("{} Writing metric family {} with type {} ({} samples)",
+                    count, metricFamily.name, metricFamily.type,
+                    metricFamily.samples.size());
 
             // Write type of metric
             stream.write("# TYPE ").write(metricFamily.name).write(getTypeNameSuffix(metricFamily.type)).write(' ')
                     .write(getTypeStr(metricFamily.type)).write('\n');
 
+            log.info("used ByteBuf with writerIndex={} capacity={}, maxCapacity={}",
+                    buf.writerIndex(), buf.capacity(), buf.maxCapacity());
+
             for (int i = 0; i < metricFamily.samples.size(); i++) {
                 Collector.MetricFamilySamples.Sample sample = metricFamily.samples.get(i);
+                log.info("{} Writing sample {} with {} labels", count, sample.name, sample.labelNames.size());
+
+                log.info("used ByteBuf with writerIndex={} capacity={}, maxCapacity={}",
+                        buf.writerIndex(), buf.capacity(), buf.maxCapacity());
+
                 stream.write(sample.name);
                 stream.write("{");
                 if (!sample.labelNames.contains("cluster")) {
@@ -91,6 +133,7 @@ public class PrometheusMetricsGeneratorUtils {
                 stream.write(Collector.doubleToGoString(sample.value));
                 stream.write('\n');
             }
+            log.info("{} Done writing metric family {}", count, metricFamily.name);
         }
     }
 

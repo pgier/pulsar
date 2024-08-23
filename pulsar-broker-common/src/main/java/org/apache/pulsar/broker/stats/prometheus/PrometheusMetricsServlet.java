@@ -76,8 +76,10 @@ public class PrometheusMetricsServlet extends HttpServlet {
         }
         long startNanos = System.nanoTime();
         AtomicBoolean taskStarted = new AtomicBoolean(false);
+        log.info("Submitting handleAsyncMetricsRequest task");
         Future<?> future = executor.submit(() -> {
             taskStarted.set(true);
+            log.info("Executing handleAsyncMetricsRequest task");
             long elapsedNanos = System.nanoTime() - startNanos;
             // check if the request has been timed out, implement a soft timeout
             // so that response writing can continue to up to 2 * timeout
@@ -90,11 +92,18 @@ public class PrometheusMetricsServlet extends HttpServlet {
                 context.complete();
                 return;
             }
-            handleAsyncMetricsRequest(context);
+            try {
+                handleAsyncMetricsRequest(context);
+                log.info("handleAsyncMetricsRequest task completed");
+            } catch (Throwable e) {
+                log.error("Failed to generate prometheus stats, handleAsyncMetricsRequest failed", e);
+                // status is set and context completed in the handleAsyncMetricsRequest
+            }
         });
         context.addListener(new AsyncListener() {
             @Override
             public void onComplete(AsyncEvent asyncEvent) throws IOException {
+                log.info("AsyncListener onComplete");
                 if (!taskStarted.get()) {
                     future.cancel(false);
                 }
@@ -102,6 +111,7 @@ public class PrometheusMetricsServlet extends HttpServlet {
 
             @Override
             public void onTimeout(AsyncEvent asyncEvent) throws IOException {
+                log.info("AsyncListener onTimeout");
                 if (!taskStarted.get()) {
                     future.cancel(false);
                 }
@@ -115,6 +125,7 @@ public class PrometheusMetricsServlet extends HttpServlet {
 
             @Override
             public void onError(AsyncEvent asyncEvent) throws IOException {
+                log.info("AsyncListener onError");
                 if (!taskStarted.get()) {
                     future.cancel(false);
                 }
@@ -133,7 +144,7 @@ public class PrometheusMetricsServlet extends HttpServlet {
         HttpServletResponse res = (HttpServletResponse) context.getResponse();
         try {
             generateMetricsSynchronously(res);
-        } catch (Exception e) {
+        } catch (Throwable e) {
             long end = System.currentTimeMillis();
             long time = end - start;
             if (e instanceof EOFException) {
